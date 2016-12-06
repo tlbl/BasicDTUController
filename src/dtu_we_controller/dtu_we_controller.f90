@@ -6,7 +6,7 @@ module dtu_we_controller
    use turbine_controller_mod
    use safety_system_mod
    implicit none
-   integer  CtrlStatus
+   integer :: CtrlStatus = 0
    real(mk) dump_array(50)
    real(mk) time_old
 contains
@@ -155,6 +155,11 @@ subroutine init_regulation(array1, array2) bind(c, name='init_regulation')
        close(88)
       endif
    endif
+   write(*, '(12f5.2)') PID_pit_var%pitch_int
+   write(*, '(12f5.2)') PID_pit_var%kp_int
+   write(*, '(12f5.2)') PID_pit_var%ki_int
+   write(*, '(12f5.2)') interpolate_array(0.2_mk, PID_pit_var%pitch_int, PID_pit_var%kp_int)
+   write(*, '(12f5.2)') interpolate_array(0.2_mk, PID_pit_var%pitch_int, PID_pit_var%ki_int)
    ! - Gain-scheduling
    PitchGSVar%invkk1 = 1.0_mk/(array1(21)*degrad)
    if (array1(22).eq.0.0_mk) then
@@ -195,7 +200,6 @@ subroutine init_regulation(array1, array2) bind(c, name='init_regulation')
    PitNonLin1 = array1(42)
    ! Default and derived parameters
    PID_gen_var%velmax = 0.0_mk !No limit to generator torque change rate
-   GenTorqueRated = PeRated/GenSpeedRefMax
    switchfirstordervar%tau = 2.0_mk*pi/GenSpeedRefMax
    MoniVar%rystevagtfirstordervar%tau = 2.0_mk*pi/GenSpeedRefMax
    SafetySystemVar%rystevagtfirstordervar%tau = 2.0_mk*pi/GenSpeedRefMax
@@ -378,6 +382,26 @@ subroutine init_regulation_advanced(array1, array2) bind(c,name='init_regulation
    TimerExcl = -0.02_mk
 end subroutine init_regulation_advanced
 !**************************************************************************************************
+subroutine init_regulation_storm(array1, array2) bind(c,name='init_regulation_storm')
+   !DEC$ IF .NOT. DEFINED(__MAKEFILE__)
+   !DEC$ ATTRIBUTES DLLEXPORT::init_regulation_storm
+   !DEC$ END IF
+   real(mk), dimension(100), intent(inout) :: array1
+   real(mk), dimension(1)  , intent(inout) :: array2
+   ! Storm controller
+   !  constant  77 ; 
+   !
+   call init_regulation_advanced(array1, array2)
+   pitchfirstordervar_storm%tau = array1(77)
+   Storm%K0 = array1(78)
+   Storm%K  = array1(79)
+   Storm%Kq0 = array1(80)
+   Storm%Kq = array1(81)
+   Storm%PitchStorm1 = array1(82)*pi/180.0_mk
+   Storm%PitchStorm2 = array1(83)*pi/180.0_mk
+
+end subroutine init_regulation_storm
+!**************************************************************************************************
 subroutine update_regulation(array1, array2) bind(c,name='update_regulation')
    !
    ! Controller interface. 
@@ -533,8 +557,13 @@ subroutine update_regulation(array1, array2) bind(c,name='update_regulation')
    array2(26) = EmergPitchStop         !   26: Flag for emergency pitch stop            [0=off/1=on]
    array2(27) = dump_array(23)         !   27: LP filtered acceleration level           [m/s^2]
    array2(28) = int(dump_array(24))    !   28: Rotor speed exlusion zone region         [-]
-   array2(29) = dump_array(25)         !   29: Filtered tower top acc. for tower damper [m/s^2]
-   array2(30) = dump_array(26)         !   30: Reference pitch from tower damper        [rad]
+   array2(29) = dump_array(25)
+   array2(30) = dump_array(26)         !   29: Filtered tower top acc. for tower damper [m/s^2]
+   array2(31) = dump_array(27)         !   30: Reference pitch from tower damper        [rad]
+   array2(32) = dump_array(28)
+   array2(33) = dump_array(29)
+   array2(34) = dump_array(30)
+   array2(35) = dump_array(31)
    return
 end subroutine update_regulation
 !**************************************************************************************************

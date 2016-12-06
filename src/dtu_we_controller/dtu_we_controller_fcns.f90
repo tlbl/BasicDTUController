@@ -53,6 +53,10 @@ module dtu_we_controller_fcns
       real(mk) invkk1, invkk2
       real(mk) kp_speed, invkk1_speed, invkk2_speed
    end type
+   !  Storm controller parameters
+   type Tstorm
+      real(mk) K, K0, Kq, Kq0, PitchStorm1, PitchStorm2
+   end type Tstorm
    ! Custom Types
    type(Twpdata), save   :: OPdatavar
    type(Texclzone), save :: ExcluZone
@@ -101,15 +105,15 @@ function interpolate_array(x, x0, f0)
    real(mk), allocatable:: x0(:), f0(:)
    n = size(x0)
    if (x .lt. x0(1)) then 
-      interpolate_array = interpolate(x, x0(1), x0(2), f0(1), f0(2))
+      interpolate_array = f0(1)
       return
    else if (x .gt. x0(n)) then 
-      interpolate_array = interpolate(x, x0(n-1), x0(n), f0(n-1), f0(n))
+      interpolate_array = f0(n)
       return
    else
-      do i= 1, n-1
-         if (x .gt. x0(i)) then
-            interpolate_array = interpolate(x, x0(i), x0(i+1), f0(i), f0(i+1))
+      do i= 2, n
+         if (x0(i) .gt. x) then
+            interpolate_array = interpolate(x, x0(i-1), x0(i), f0(i-1), f0(i))
             return
          endif
       enddo
@@ -229,6 +233,7 @@ function PID2(stepno,dt,kgain,PIDvar,error,added_term)
    ! Update proportional term
    PIDvar%outpro = 0.5_mk*(Kgain(1, 1)*PIDvar%Kpro(1)*(error(1) + PIDvar%error1(1))&
                           +Kgain(1, 2)*PIDvar%Kpro(2)*(error(2) + PIDvar%error1(2)))
+   !write(*, '(f5.2, f5.2,f5.2, f5.2)') Kgain(1, 1)*PIDvar%Kpro(1), PIDvar%Kpro(1), Kgain(2, 1)*PIDvar%Kint(1), PIDvar%Kint(1)
    ! Update differential term
    PIDvar%outdif = (Kgain(3, 1)*PIDvar%Kdif(1)*(error(1) - PIDvar%error1_old(1)))/dt + added_term*dt
    ! Sum up

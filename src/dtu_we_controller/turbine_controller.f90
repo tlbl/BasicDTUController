@@ -8,7 +8,7 @@ module turbine_controller_mod
    logical const_power, generator_cutin
    integer PartialLoadControlMode, stoptype, GearRatio
    real(mk) deltat
-   real(mk) GenSpeedRefMax, GenSpeedRefMin, PeRated, GenTorqueRated, PitchStopAng, GenTorqueMax
+   real(mk) GenSpeedRefMax, GenSpeedRefMin, PeRated, PitchStopAng, GenTorqueMax
    real(mk) TTfa_PWR_lower, TTfa_PWR_upper
    real(mk) Kopt, Kopt_dot, TSR_opt, R
    real(mk) Vcutout, Vstorm
@@ -22,6 +22,7 @@ module turbine_controller_mod
    ! Types
    type(Tlowpass2order), save :: omega2ordervar
    type(Tfirstordervar), save :: pitchfirstordervar
+   type(Tfirstordervar), save :: pitchfirstordervar_storm
    type(Tfirstordervar), save :: wspfirstordervar
    type(Tfirstordervar), save :: switchfirstordervar
    type(Tpidvar), save        :: PID_gen_var
@@ -36,6 +37,7 @@ module turbine_controller_mod
    type(Tswitch), save        :: SwitchVar
    type(TSafetySystem), save  :: MoniVar
    type(TPitchGSvar), save    :: PitchGSVar
+   type(Tstorm), save         :: Storm
 !**************************************************************************************************
 contains
 !**************************************************************************************************
@@ -109,10 +111,10 @@ subroutine normal_operation(GenSpeed, PitchVect, wsp, Pe, TTfa_acc, GenTorqueRef
    real(mk), intent(inout) :: dump_array(50) ! Array for output.
    real(mk) WSPfilt
    real(mk) GenSpeedFilt, dGenSpeed_dtFilt
-   real(mk) PitchMean, PitchMeanFilt, PitchMin
-   real(mk) GenSpeedRef_full
+   real(mk) PitchMean, PitchMeanFilt, PitchMin, PitchMeanFilt_Storm
+   real(mk) GenSpeedRef_full, GenTorqueRated
    real(mk) Qdamp_ref, theta_dam_ref, P_filt
-   real(mk) x, y(2)
+   real(mk) x, x_storm, y(2)
    !***********************************************************************************************
    ! Inputs and their filtering
    !***********************************************************************************************
@@ -125,6 +127,8 @@ subroutine normal_operation(GenSpeed, PitchVect, wsp, Pe, TTfa_acc, GenTorqueRef
    ! Low-pass filtering of the mean pitch angle for gain scheduling
    PitchMeanFilt = lowpass1orderfilt(deltat, stepno, pitchfirstordervar, PitchMean)
    PitchMeanFilt = min(PitchMeanFilt, 30.0_mk*degrad)
+   ! Low-pass filtering of the mean pitch angle for gain scheduling
+   PitchMeanFilt_Storm = lowpass1orderfilt(deltat, stepno, pitchfirstordervar_storm, PitchMean)
    ! Low-pass filtering of the nacelle wind speed 
    WSPfilt = lowpass1orderfilt(deltat, stepno, wspfirstordervar, wsp)
    ! Minimum pitch angle may vary with filtered wind speed
@@ -133,17 +137,24 @@ subroutine normal_operation(GenSpeed, PitchVect, wsp, Pe, TTfa_acc, GenTorqueRef
    ! Limit reference speed for storm control
    !***********************************************************************************************
    if (Vcutout .gt. Vstorm) then
-      GenSpeedRef_full = GenSpeedRefMax - max(0.0_mk, &
-                         (WSPfilt - Vstorm)/(Vcutout - Vstorm)*(GenSpeedRefMax - GenSpeedRefMin))
+      GenSpeedRef_full = Storm%K*PitchMeanFilt_Storm + Storm%K0
+      x_storm = switch_spline(PitchMeanFilt_Storm, Storm%PitchStorm1, Storm%PitchStorm2)
+      GenSpeedRef_full = (1.d0 - x_storm)*GenSpeedRefMax + x_storm*GenSpeedRef_full
+      GenTorqueRated = Storm%Kq*PitchMeanFilt_Storm + Storm%Kq0
+      GenTorqueRated = (1.d0 - x_storm)*PeRated/GenSpeedRefMax + x_storm*GenTorqueRated
+      !GenSpeedRef_full = GenSpeedRefMax - max(0.0_mk, &
+      !                   (WSPfilt - Vstorm)/(Vcutout - Vstorm)*(GenSpeedRefMax - GenSpeedRefMin))
    else
       GenSpeedRef_full = GenSpeedRefMax
+      GenTorqueRated = PeRated/GenSpeedRefMax
    endif
+   
    GenSpeedRef_full = max(min(GenSpeedRef_full, GenSpeedRefMax), GenSpeedRefMin)
    !***********************************************************************************************
    ! PID regulation of generator torque 
    !***********************************************************************************************
    call torquecontroller(GenSpeed, GenSpeedFilt, dGenSpeed_dtFilt, PitchMean, WSPfilt, PitchMin, &
-                         GenSpeedRef_full, Pe, GenTorqueRef, dump_array)
+                         GenSpeedRef_full, Pe, GenTorqueRated, GenTorqueRef, dump_array)
    !***********************************************************************************************
    ! Active DT damping based on filtered rotor speed
    !***********************************************************************************************
@@ -155,7 +166,7 @@ subroutine normal_operation(GenSpeed, PitchVect, wsp, Pe, TTfa_acc, GenTorqueRef
    ! PID regulation of collective pitch angle  
    !***********************************************************************************************
    call pitchcontroller(GenSpeedFilt, dGenSpeed_dtFilt, PitchMeanFilt, Pe, PitchMin, &
-                        GenSpeedRef_full, PitchColRef, dump_array)
+                        GenSpeedRef_full, PitchMeanFilt_Storm, PitchColRef, dump_array)
    !***********************************************************************************************
    ! Active Tower damping based on filtered tower top aceleration
    !***********************************************************************************************
@@ -168,6 +179,10 @@ subroutine normal_operation(GenSpeed, PitchVect, wsp, Pe, TTfa_acc, GenTorqueRef
    dump_array(2) = WSPfilt
    dump_array(3) = GenSpeedFilt
    dump_array(20) = PitchMeanFilt
+   dump_array(28) = GenSpeedRef_full
+   dump_array(29) = GenTorqueRated
+   dump_array(30) = x_storm
+   dump_array(31) = PitchMeanFilt_Storm
 end subroutine
 !**************************************************************************************************
 subroutine start_up(CtrlStatus, GenSpeed, PitchVect, wsp, GenTorqueRef, PitchColRef, dump_array)
@@ -182,10 +197,11 @@ subroutine start_up(CtrlStatus, GenSpeed, PitchVect, wsp, GenTorqueRef, PitchCol
    real(mk), intent(out)   :: GenTorqueRef ! Generator torque reference [Nm].
    real(mk), intent(out)   :: PitchColRef  ! Reference collective pitch [rad].
    real(mk), intent(inout) :: dump_array(50) ! Array for output.
-   real(mk) WSPfilt, GenSpeedFilt, dGenSpeed_dtFilt, PitchMin
+   real(mk) WSPfilt, GenSpeedFilt, dGenSpeed_dtFilt, PitchMin, GenTorqueRated
    real(mk) GenSpeedFiltErr, err_pitch(2)
    real(mk) kgain_torque(3), kgain_pitch(3, 2)
    real(mk) dummy, y(2), PitchMean, PitchMeanFilt, GenSpeedRef
+   GenTorqueRated = PeRated/GenSpeedRefMax
    ! Low-pass filtering of the rotor speed
    y = lowpass2orderfilt(deltat, stepno, omega2ordervar, GenSpeed)
    GenSpeedFilt = y(1)
@@ -399,7 +415,7 @@ subroutine monitoring(CtrlStatus, GridFlag, GenSpeed, TTAcc, dump_array)
 end subroutine
 !**************************************************************************************************
 subroutine torquecontroller(GenSpeed, GenSpeedFilt, dGenSpeed_dtFilt, PitchMean, WSPfilt, &
-                            PitchMin, GenSpeedRef_full, Pe, GenTorqueRef, dump_array)
+                            PitchMin, GenSpeedRef_full, Pe, GenTorqueRated, GenTorqueRef, dump_array)
    !
    ! Generator torque controller. Controller that computes the generator torque reference.
    !
@@ -409,8 +425,9 @@ subroutine torquecontroller(GenSpeed, GenSpeedFilt, dGenSpeed_dtFilt, PitchMean,
    real(mk), intent(in) :: PitchMean         ! Mean pitch angle [rad].
    real(mk), intent(in) :: PitchMin          ! Minimum pitch angle [rad].
    real(mk), intent(in) :: WSPfilt           ! Filtered wind speed [m/s].
-   real(mk), intent(in) :: GenSpeedRef_full  ! Reference generator speed [rad/s].
+   real(mk), intent(inout) :: GenSpeedRef_full  ! Reference generator speed [rad/s].
    real(mk), intent(in) :: Pe                ! Measured electrical power [W].
+   real(mk), intent(in) :: GenTorqueRated
    real(mk), intent(out) :: GenTorqueRef     ! Generator torque reference [Nm].
    real(mk), intent(inout) :: dump_array(50) ! Array for output.
    real(mk) GenTorqueMin_full, GenTorqueMax_full, GenTorqueMin_partial, GenTorqueMax_partial
@@ -480,8 +497,8 @@ subroutine torquecontroller(GenSpeed, GenSpeedFilt, dGenSpeed_dtFilt, PitchMean,
    !***********************************************************************************************
    ! Rotor speed exclusion zone
    !***********************************************************************************************
-   call rotorspeedexcl(GenSpeedFilt, Pe/GenSpeed, GenTorqueMin_partial, GenTorqueMax_partial, GenSpeedFiltErr, &
-                       outmax, outmin, dump_array)
+   call rotorspeedexcl(GenSpeedFilt, Pe/GenSpeed, outmin, outmax, GenSpeedFiltErr, &
+                       outmax, outmin, GenSpeedRef_full, dump_array)
    PID_gen_var%outmin = outmin
    PID_gen_var%outmax = outmax
    if (PID_gen_var%outmin .gt. PID_gen_var%outmax) PID_gen_var%outmin = PID_gen_var%outmax
@@ -500,7 +517,7 @@ subroutine torquecontroller(GenSpeed, GenSpeedFilt, dGenSpeed_dtFilt, PitchMean,
 end subroutine
 !**************************************************************************************************
 subroutine pitchcontroller(GenSpeedFilt, dGenSpeed_dtFilt, PitchMeanFilt, Pe, PitchMin, &
-                           GenSpeedRef_full, PitchColRef, dump_array)
+                           GenSpeedRef_full, PitchMeanFilt_Storm, PitchColRef, dump_array)
    !
    ! Pitch controller. Controller that computes the reference collective pitch angle.
    !
@@ -510,6 +527,7 @@ subroutine pitchcontroller(GenSpeedFilt, dGenSpeed_dtFilt, PitchMeanFilt, Pe, Pi
    real(mk), intent(in) :: PitchMin         ! Minimum pitch angle [rad].
    real(mk), intent(in) :: GenSpeedRef_full ! Reference generator speed [rad/s].
    real(mk), intent(in) :: Pe               ! Measured electrical power [W].
+   real(mk), intent(in) :: PitchMeanFilt_Storm ! Filtered mean pitch angle for storm [rad].
    real(mk), intent(out) :: PitchColRef     ! Reference collective pitch angle [rad].
    real(mk), intent(inout) :: dump_array(50) ! Array for output.
    real(mk) GenSpeedFiltErr, added_term, aero_gain, aero_damp, kgain(3, 2), err_pitch(2)
@@ -526,9 +544,10 @@ subroutine pitchcontroller(GenSpeedFilt, dGenSpeed_dtFilt, PitchMeanFilt, Pe, Pi
    PID_pit_var%outmin = PitchMin
    PID_pit_var%outmax = PitchStopAng
    if (allocated(PID_pit_var%kp_int)) then ! Fine gain scheduling from file
-       PID_pit_var%Kpro(1) = interpolate_array(PitchMeanFilt, PID_pit_var%pitch_int, PID_pit_var%kp_int)
-       PID_pit_var%Kdif(1) = interpolate_array(PitchMeanFilt, PID_pit_var%pitch_int, PID_pit_var%kd_int)
-       PID_pit_var%Kint(1) = interpolate_array(PitchMeanFilt, PID_pit_var%pitch_int, PID_pit_var%ki_int)
+       !write(*, '(f5.2, f5.2, f5.2)') PitchMeanFilt, PID_pit_var%pitch_int(1), PID_pit_var%pitch_int(16)
+       PID_pit_var%kpro(1) = interpolate_array(PitchMeanFilt, PID_pit_var%pitch_int, PID_pit_var%kp_int)
+       PID_pit_var%kdif(1) = interpolate_array(PitchMeanFilt, PID_pit_var%pitch_int, PID_pit_var%kd_int)
+       PID_pit_var%kint(1) = interpolate_array(PitchMeanFilt, PID_pit_var%pitch_int, PID_pit_var%ki_int)
        kgain = 1.0_mk
    else ! Classical gain scheduling
        ! Aerodynamic gain scheduling dQ/dtheta
@@ -564,20 +583,21 @@ subroutine pitchcontroller(GenSpeedFilt, dGenSpeed_dtFilt, PitchMeanFilt, Pe, Pi
    dump_array(19) = AddedPitchRate
 end subroutine
 !**************************************************************************************************
-subroutine rotorspeedexcl(GenSpeedFilt, GenTorque, Qg_min_partial, GenTorqueMax_partial, GenSpeedFiltErr, &
-                          outmax, outmin, dump_array)
+subroutine rotorspeedexcl(GenSpeedFilt, GenTorque, GenTorqueMin_partial, GenTorqueMax_partial, GenSpeedFiltErr, &
+                          outmax, outmin, GenSpeedRef, dump_array)
    !
    ! Rotor speed exclusion zone. Subroutine that changes the generator torque limits and the 
    ! generator speed error for the generator PID controller to avoid a rotor speed band.
    !
    real(mk), intent(in) :: GenSpeedFilt         ! Filtered measured generator speed [rad/s].
-   real(mk), intent(in) :: Qg_min_partial       ! Generator torque lower limit [Nm].
+   real(mk), intent(in) :: GenTorqueMin_partial ! Generator torque lower limit [Nm].
    real(mk), intent(in) :: GenTorqueMax_partial ! Generator torque upper limit [Nm].
    real(mk), intent(in) :: GenTorque          ! Measured generator torque [Nm].
    real(mk), intent(inout) :: outmax          ! Generator torque maximum value [Nm].
    real(mk), intent(inout) :: outmin          ! Generator torque minimum value [Nm].
    real(mk), intent(inout) :: GenSpeedFiltErr ! Filtered generator speed error [rad/s].
    real(mk), intent(inout) :: dump_array(50)  ! Array for output.
+   real(mk), intent(out) :: GenSpeedRef
    real(mk) y(2), GenSpeedFiltNotch, x1, x2
    real(mk) :: x
    real(mk) Lwr, Lwr_Tg, Hwr, Hwr_Tg, time_excl_delay
@@ -596,7 +616,8 @@ subroutine rotorspeedexcl(GenSpeedFilt, GenTorque, Qg_min_partial, GenTorqueMax_
          case (0)
             if ((GenSpeedFilt .gt. Lwr*0.99_mk) .and. (TimerGenCutin .gt. CutinVar%delay))then
                ! rotor reference angular speed
-               GenSpeedFiltErr = GenSpeedFiltNotch - Lwr
+               GenSpeedRef = Lwr
+               GenSpeedFiltErr = GenSpeedFiltNotch - GenSpeedRef
                excl_flag = 0.0_mk
                w_region = 1
             elseif (GenSpeedFilt .gt. Hwr*(2.0_mk-0.99_mk)) then
@@ -609,7 +630,8 @@ subroutine rotorspeedexcl(GenSpeedFilt, GenTorque, Qg_min_partial, GenTorqueMax_
                ! rotor reference angular speed
                TimerExcl = 0.0_mk
                excl_flag = 1.0_mk
-               GenSpeedFiltErr = GenSpeedFiltNotch - Lwr
+               GenSpeedRef = Lwr
+               GenSpeedFiltErr = GenSpeedFiltNotch - GenSpeedRef
                w_region = 2
             elseif (GenSpeedFilt .lt. Lwr*0.99_mk) then
                w_region = 0
@@ -620,7 +642,8 @@ subroutine rotorspeedexcl(GenSpeedFilt, GenTorque, Qg_min_partial, GenTorqueMax_
                else
                   x = switch_spline(TimerExcl, 0.0_mk, time_excl_delay)
                endif
-               GenSpeedFiltErr = GenSpeedFiltNotch - (Lwr*x + Hwr*(1.0_mk - x))
+               GenSpeedRef = (Lwr*x + Hwr*(1.0_mk - x))
+               GenSpeedFiltErr = GenSpeedFiltNotch - GenSpeedRef
                w_region = 1
             endif
          case (2)
@@ -628,7 +651,8 @@ subroutine rotorspeedexcl(GenSpeedFilt, GenTorque, Qg_min_partial, GenTorqueMax_
                TimerExcl = 0.0_mk
                excl_flag = 1.0_mk
                ! rotor reference angular speed
-               GenSpeedFiltErr = GenSpeedFiltNotch - Hwr
+               GenSpeedRef = Hwr
+               GenSpeedFiltErr = GenSpeedFiltNotch - GenSpeedRef
                w_region = 1
             elseif (GenSpeedFilt .gt. Hwr*(2.0_mk-0.95_mk)) then
                w_region = 3
@@ -639,7 +663,8 @@ subroutine rotorspeedexcl(GenSpeedFilt, GenTorque, Qg_min_partial, GenTorqueMax_
                else
                   x = switch_spline(TimerExcl, 0.0_mk, time_excl_delay)
                endif
-               GenSpeedFiltErr = GenSpeedFiltNotch - (Hwr*x + Lwr*(1.0_mk - x))
+               GenSpeedRef = Hwr*x + Lwr*(1.0_mk - x)
+               GenSpeedFiltErr = GenSpeedFiltNotch - GenSpeedRef
                w_region = 2
             endif
          case default
@@ -650,7 +675,8 @@ subroutine rotorspeedexcl(GenSpeedFilt, GenTorque, Qg_min_partial, GenTorqueMax_
             else
                ! rotor reference angular speed
                excl_flag = 0.0_mk
-               GenSpeedFiltErr = GenSpeedFiltNotch - Hwr
+               GenSpeedRef = Hwr
+               GenSpeedFiltErr = GenSpeedFiltNotch - GenSpeedRef
                w_region = 2
             endif
       end select
@@ -659,9 +685,10 @@ subroutine rotorspeedexcl(GenSpeedFilt, GenTorque, Qg_min_partial, GenTorqueMax_
          x2 = switch_spline(GenSpeedFilt, Hwr, Hwr*(2.0_mk-0.99_mk))
          !min/max generator torque @ exclution zone
          outmax  = GenTorqueMax_partial*(1.0_mk-x1 +x2) + Lwr_Tg * 1.05_mk*(x1-x1*x2)
-         outmin  = Qg_min_partial*(1.0_mk-x1 +x2) + Hwr_Tg * 0.95_mk*(x1-x1*x2)
+         outmin  = GenTorqueMin_partial*(1.0_mk-x1 +x2) + Hwr_Tg * 0.95_mk*(x1-x1*x2)
       endif
    dump_array(24) = w_region
+   dump_array(25) = GenSpeedFiltNotch
    endif
 end subroutine
 !**************************************************************************************************
@@ -699,8 +726,8 @@ subroutine towerdamper(TTfa_acc, theta_dam_ref, dump_array)
       TTfa_acc_filt = 0.0_mk
       theta_dam_ref = 0.0_mk
    endif
-   dump_array(25) = TTfa_acc_filt
-   dump_array(26) = theta_dam_ref
+   dump_array(26) = TTfa_acc_filt
+   dump_array(27) = theta_dam_ref
 end subroutine
 !**************************************************************************************************
 end module turbine_controller_mod
