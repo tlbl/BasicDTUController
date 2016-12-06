@@ -525,17 +525,24 @@ subroutine pitchcontroller(GenSpeedFilt, dGenSpeed_dtFilt, PitchMeanFilt, Pe, Pi
    ! Limits
    PID_pit_var%outmin = PitchMin
    PID_pit_var%outmax = PitchStopAng
-   ! Aerodynamic gain scheduling dQ/dtheta
-   aero_gain = 1.0_mk + PitchGSVar%invkk1*PitchMeanFilt + PitchGSVar%invkk2*PitchMeanFilt**2
-   kgain = 1.0_mk/aero_gain
+   if (allocated(PID_pit_var%kp_int)) then ! Fine gain scheduling from file
+       PID_pit_var%Kpro(1) = interpolate_array(PitchMeanFilt, PID_pit_var%pitch_int, PID_pit_var%kp_int)
+       PID_pit_var%Kdif(1) = interpolate_array(PitchMeanFilt, PID_pit_var%pitch_int, PID_pit_var%kd_int)
+       PID_pit_var%Kint(1) = interpolate_array(PitchMeanFilt, PID_pit_var%pitch_int, PID_pit_var%ki_int)
+       kgain = 1.0_mk
+   else ! Classical gain scheduling
+       ! Aerodynamic gain scheduling dQ/dtheta
+       aero_gain = 1.0_mk + PitchGSVar%invkk1*PitchMeanFilt + PitchGSVar%invkk2*PitchMeanFilt**2
+       kgain = 1.0_mk/aero_gain
+       ! Gainscheduling according to dQaero/dOmega
+       aero_damp = 1.0_mk + PitchGSVar%invkk1_speed*PitchMeanFilt + &
+                   PitchGSVar%invkk2_speed*PitchMeanFilt**2
+       PID_pit_var%kpro(1) = PID_pit_var%kpro(1) + PitchGSVar%kp_speed*aero_damp
+   endif
    ! Nonlinear gain to avoid large rotor speed excursion
    if (rel_limit .ne. 0.0_mk) then
      kgain = kgain*(GenSpeedFiltErr**2 / (GenSpeedRef_full*(rel_limit - 1.0_mk))**2 + 1.0_mk)
    endif
-   ! Gainscheduling according to dQaero/dOmega
-   aero_damp = 1.0_mk + PitchGSVar%invkk1_speed*PitchMeanFilt + &
-               PitchGSVar%invkk2_speed*PitchMeanFilt**2
-   PID_pit_var%kpro(1) = PID_pit_var%kpro(1) + PitchGSVar%kp_speed*aero_damp
    !-----------------------------------------------------------------------------------------------
    ! Compute PID feedback to pitch demand
    !-----------------------------------------------------------------------------------------------

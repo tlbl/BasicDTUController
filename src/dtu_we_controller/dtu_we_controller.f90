@@ -18,7 +18,7 @@ subroutine init_regulation(array1, array2) bind(c, name='init_regulation')
    real(mk), dimension(100), intent(inout) :: array1
    real(mk), dimension(1), intent(inout)   :: array2
    ! Local vars
-   integer i, ifejl
+   integer i, ifejl, n
    character(len=32) text32
    real(mk) minimum_pitch_angle
    logical findes
@@ -130,6 +130,31 @@ subroutine init_regulation(array1, array2) bind(c, name='init_regulation')
    PID_pit_var%kpro(2) = array1(19)
    PID_pit_var%kint(2) = array1(20)
    PID_pit_var%kdif(2) = 0.0_mk
+   if ((PID_pit_var%kpro(1) .eq. 0.0_mk) .and. (PID_pit_var%kint(1) .eq. 0.0_mk)) then 
+     write(*,'(a)') 'Proportional and integral gains of the pitch controller are set to zero. ...'
+     write(*,'(a)') '...Trying to load control\pitch_gains.dat'
+     write(text32,'(i3)') int(minimum_pitch_angle*raddeg)
+     inquire(file='.\control\pitch_gains.dat',exist=findes)
+     if (findes) then
+       open(88,file='.\control\pitch_gains.dat')
+       read(88,*,iostat=ifejl) n
+       allocate(PID_pit_var%kp_int(n), PID_pit_var%kd_int(n), PID_pit_var%ki_int(n), PID_pit_var%pitch_int(n))
+       if (ifejl.eq.0) then
+         do i=1,n
+           read(88,*, iostat=ifejl) PID_pit_var%pitch_int(i), PID_pit_var%kp_int(i), PID_pit_var%kd_int(i), PID_pit_var%ki_int(i)
+           if (ifejl.ne.0) then
+             write(6,*) ' *** ERROR *** Could not read lines in pitch gain file'
+             stop
+           endif
+         enddo
+         PID_pit_var%pitch_int = PID_pit_var%pitch_int*degrad
+       else
+         write(6,*) ' *** ERROR *** Could not read number of lines in pitch gain file'
+         stop
+       endif
+       close(88)
+      endif
+   endif
    ! - Gain-scheduling
    PitchGSVar%invkk1 = 1.0_mk/(array1(21)*degrad)
    if (array1(22).eq.0.0_mk) then

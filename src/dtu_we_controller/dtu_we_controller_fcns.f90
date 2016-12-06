@@ -18,6 +18,7 @@ module dtu_we_controller_fcns
       real(mk) Kpro(2),Kdif(2),Kint(2),outmin,outmax,velmax,error1(2),outset1,outres1
       integer stepno1
       real(mk) outset,outpro,outdif,error1_old(2),outset1_old,outres1_old,outres
+      real(mk), allocatable:: kp_int(:), kd_int(:), ki_int(:), pitch_int(:)
    end type Tpid2var
    type Twpdata
       real(mk) wpdata(maxwplines,2)
@@ -92,6 +93,28 @@ function interpolate(x, x0, x1, f0, f1)
    endif
    return
 end function interpolate
+!**************************************************************************************************
+function interpolate_array(x, x0, f0)
+   ! Linear interpolation of x through the points in the arrays (x0, f0)
+   integer i, n
+   real(mk) interpolate_array, x
+   real(mk), allocatable:: x0(:), f0(:)
+   n = size(x0)
+   if (x .lt. x0(1)) then 
+      interpolate_array = interpolate(x, x0(1), x0(2), f0(1), f0(2))
+      return
+   else if (x .gt. x0(n)) then 
+      interpolate_array = interpolate(x, x0(n-1), x0(n), f0(n-1), f0(n))
+      return
+   else
+      do i= 1, n-1
+         if (x .gt. x0(i)) then
+            interpolate_array = interpolate(x, x0(i), x0(i+1), f0(i), f0(i+1))
+            return
+         endif
+      enddo
+   endif
+end function interpolate_array
 !**************************************************************************************************
 function GetOptiPitch(wsp)
    ! Computes pitch angle from look-up table based on wind speed input
