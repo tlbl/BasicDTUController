@@ -155,11 +155,6 @@ subroutine init_regulation(array1, array2) bind(c, name='init_regulation')
        close(88)
       endif
    endif
-   write(*, '(12f5.2)') PID_pit_var%pitch_int
-   write(*, '(12f5.2)') PID_pit_var%kp_int
-   write(*, '(12f5.2)') PID_pit_var%ki_int
-   write(*, '(12f5.2)') interpolate_array(0.2_mk, PID_pit_var%pitch_int, PID_pit_var%kp_int)
-   write(*, '(12f5.2)') interpolate_array(0.2_mk, PID_pit_var%pitch_int, PID_pit_var%ki_int)
    ! - Gain-scheduling
    PitchGSVar%invkk1 = 1.0_mk/(array1(21)*degrad)
    if (array1(22).eq.0.0_mk) then

@@ -126,7 +126,7 @@ subroutine normal_operation(GenSpeed, PitchVect, wsp, Pe, TTfa_acc, GenTorqueRef
    dGenSpeed_dtFilt = y(2)
    ! Low-pass filtering of the mean pitch angle for gain scheduling
    PitchMeanFilt = lowpass1orderfilt(deltat, stepno, pitchfirstordervar, PitchMean)
-   PitchMeanFilt = min(PitchMeanFilt, 30.0_mk*degrad)
+   !PitchMeanFilt = min(PitchMeanFilt, 30.0_mk*degrad)
    ! Low-pass filtering of the mean pitch angle for gain scheduling
    PitchMeanFilt_Storm = lowpass1orderfilt(deltat, stepno, pitchfirstordervar_storm, PitchMean)
    ! Low-pass filtering of the nacelle wind speed 
