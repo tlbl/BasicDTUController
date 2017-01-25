@@ -23,6 +23,7 @@ module turbine_controller_mod
    type(Tlowpass2order), save :: omega2ordervar
    type(Tfirstordervar), save :: pitchfirstordervar
    type(Tfirstordervar), save :: pitchfirstordervar_storm
+   type(Tfirstordervar), save :: pitchfirstordervar_storm_torque
    type(Tfirstordervar), save :: wspfirstordervar
    type(Tfirstordervar), save :: switchfirstordervar
    type(Tpidvar), save        :: PID_gen_var
@@ -111,7 +112,7 @@ subroutine normal_operation(GenSpeed, PitchVect, wsp, Pe, TTfa_acc, GenTorqueRef
    real(mk), intent(inout) :: dump_array(50) ! Array for output.
    real(mk) WSPfilt
    real(mk) GenSpeedFilt, dGenSpeed_dtFilt
-   real(mk) PitchMean, PitchMeanFilt, PitchMin, PitchMeanFilt_Storm
+   real(mk) PitchMean, PitchMeanFilt, PitchMin, PitchMeanFilt_Storm, PitchMeanFilt_Storm_Torque
    real(mk) GenSpeedRef_full, GenTorqueRated
    real(mk) Qdamp_ref, theta_dam_ref, P_filt
    real(mk) x, x_storm, y(2)
@@ -129,6 +130,7 @@ subroutine normal_operation(GenSpeed, PitchVect, wsp, Pe, TTfa_acc, GenTorqueRef
    !PitchMeanFilt = min(PitchMeanFilt, 30.0_mk*degrad)
    ! Low-pass filtering of the mean pitch angle for gain scheduling
    PitchMeanFilt_Storm = lowpass1orderfilt(deltat, stepno, pitchfirstordervar_storm, PitchMean)
+   PitchMeanFilt_Storm_Torque = lowpass1orderfilt(deltat, stepno, pitchfirstordervar_storm_torque, PitchMean)
    ! Low-pass filtering of the nacelle wind speed 
    WSPfilt = lowpass1orderfilt(deltat, stepno, wspfirstordervar, wsp)
    ! Minimum pitch angle may vary with filtered wind speed
@@ -140,7 +142,7 @@ subroutine normal_operation(GenSpeed, PitchVect, wsp, Pe, TTfa_acc, GenTorqueRef
       GenSpeedRef_full = Storm%K*PitchMeanFilt_Storm + Storm%K0
       x_storm = switch_spline(PitchMeanFilt_Storm, Storm%PitchStorm1, Storm%PitchStorm2)
       GenSpeedRef_full = (1.d0 - x_storm)*GenSpeedRefMax + x_storm*GenSpeedRef_full
-      GenTorqueRated = Storm%Kq*PitchMeanFilt_Storm + Storm%Kq0
+      GenTorqueRated = Storm%Kq*PitchMeanFilt_Storm_Torque + Storm%Kq0
       GenTorqueRated = (1.d0 - x_storm)*PeRated/GenSpeedRefMax + x_storm*GenTorqueRated
       !GenSpeedRef_full = GenSpeedRefMax - max(0.0_mk, &
       !                   (WSPfilt - Vstorm)/(Vcutout - Vstorm)*(GenSpeedRefMax - GenSpeedRefMin))
@@ -537,7 +539,9 @@ subroutine pitchcontroller(GenSpeedFilt, dGenSpeed_dtFilt, PitchMeanFilt, Pe, Pi
    if ((PitNonLin1 .gt. 0.0_mk).and.(Err0 .gt. 0.0_mk).and.(ErrDot0.gt.0.0_mk)) then
      added_term = GenSpeedFiltErr/Err0 + dGenSpeed_dtFilt/ErrDot0
      if (added_term .gt. 1.0_mk) then
-       AddedPitchRate = PitNonLin1*added_term + AddedPitchRate
+       AddedPitchRate = PitNonLin1*added_term !+ AddedPitchRate
+     else
+       AddedPitchRate = 0.0_mk
      endif
    endif
    ! Limits
@@ -613,7 +617,7 @@ subroutine rotorspeedexcl(GenSpeedFilt, GenTorque, GenTorqueMin_partial, GenTorq
    TimerExcl = TimerExcl + deltat
    if ((Lwr .gt. 0.0_mk) .and. (Hwr .gt. 0.0_mk)) then
       select case (w_region)
-         case (0)
+         case (0) ! Below lower rotor speed limit
             if ((GenSpeedFilt .gt. Lwr*0.99_mk) .and. (TimerGenCutin .gt. CutinVar%delay))then
                ! rotor reference angular speed
                GenSpeedRef = Lwr
@@ -625,7 +629,7 @@ subroutine rotorspeedexcl(GenSpeedFilt, GenTorque, GenTorqueMin_partial, GenTorq
             else
                w_region = 0
             endif
-         case (1)
+         case (1) ! Constant speed region at lower rotor speed limit
             if (GenTorque .gt. Lwr_Tg) then
                ! rotor reference angular speed
                TimerExcl = 0.0_mk
@@ -646,7 +650,7 @@ subroutine rotorspeedexcl(GenSpeedFilt, GenTorque, GenTorqueMin_partial, GenTorq
                GenSpeedFiltErr = GenSpeedFiltNotch - GenSpeedRef
                w_region = 1
             endif
-         case (2)
+         case (2) ! Constant speed region at higher rotor speed limit
             if (GenTorque .lt. Hwr_Tg) then
                TimerExcl = 0.0_mk
                excl_flag = 1.0_mk
@@ -667,7 +671,7 @@ subroutine rotorspeedexcl(GenSpeedFilt, GenTorque, GenTorqueMin_partial, GenTorq
                GenSpeedFiltErr = GenSpeedFiltNotch - GenSpeedRef
                w_region = 2
             endif
-         case default
+         case default ! Above higher rotor speed limit
             if (GenSpeedFilt .gt. Hwr*(2.0_mk - 0.99_mk)) then
                w_region = 3
             elseif (GenSpeedFilt .lt. Lwr*0.99_mk) then

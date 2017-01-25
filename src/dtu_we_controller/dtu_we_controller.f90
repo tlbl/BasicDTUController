@@ -388,12 +388,13 @@ subroutine init_regulation_storm(array1, array2) bind(c,name='init_regulation_st
    !
    call init_regulation_advanced(array1, array2)
    pitchfirstordervar_storm%tau = array1(77)
-   Storm%K0 = array1(78)
-   Storm%K  = array1(79)
-   Storm%Kq0 = array1(80)
-   Storm%Kq = array1(81)
-   Storm%PitchStorm1 = array1(82)*pi/180.0_mk
-   Storm%PitchStorm2 = array1(83)*pi/180.0_mk
+   pitchfirstordervar_storm_torque%tau = array1(78)
+   Storm%K0 = array1(79)
+   Storm%K  = array1(80)
+   Storm%Kq0 = array1(81)
+   Storm%Kq = array1(82)
+   Storm%PitchStorm1 = array1(83)*pi/180.0_mk
+   Storm%PitchStorm2 = array1(84)*pi/180.0_mk
 
 end subroutine init_regulation_storm
 !**************************************************************************************************
